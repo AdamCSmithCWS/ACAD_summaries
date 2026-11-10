@@ -6,8 +6,8 @@
 
 ## spatial summary of eBird trends
 ## 
-## 
-# https://ebird.github.io/ebirdst/articles/trends.html
+## following the methods described here to summarise trends with uncertainty
+## https://ebird.github.io/ebirdst/articles/trends.html#applications-regional 
 #
 
 
@@ -17,15 +17,17 @@ library(bbsBayes2)
 library(terra)
 library(sf)
 
-
+# species-level summaries of available trends
 tr <- ebirdst::ebirdst_runs |> 
-  filter(!is.na(rsquared), # selects only the species with trends
+  filter(has_trends, # selects only the species with trends
          !grepl("example",species_code)) # drops the example species data 
 
+# regions for trend summary
 regions1 <- read_sf("data/ACAD_non-marine_regions_2026.shp") |> 
   group_by(region) |> 
   summarise() 
 
+#transform to equal area projection and re-calculate area
 regions <- regions1 |> 
   st_transform(crs = "ESRI:102008") |> 
   mutate(area_km2 = as.numeric(st_area(regions1)/1e6))
@@ -33,6 +35,9 @@ regions <- regions1 |>
 region_names <- regions |> 
   st_drop_geometry() |> 
   as.data.frame()
+
+
+# viewing a potential mismatch between some polygons ----------------------
 
 
 tmp <- regions |> 
@@ -53,8 +58,11 @@ pdf("overlap.pdf",
 print(tst)
 dev.off()
 
+## end mismatch viewing
 
-plot_overlap <- TRUE
+
+
+plot_overlap <- TRUE # generates a pdf map showing the distribution of trend grid-cell centres to polygons
 
 for(i in 1:nrow(tr)){
   
@@ -68,8 +76,9 @@ for(i in 1:nrow(tr)){
   trends <- load_trends(species,
                         fold_estimates = TRUE) # fold estimates allow uncertainty
   
-  #season <- unique(trends$season)
-  
+
+
+# selecting the point centres to simplify the spatial overlay -------------
   trend_points <- trends |> 
     group_by(srd_id,longitude,latitude) |> 
     summarise(.groups = "drop")
@@ -80,14 +89,14 @@ for(i in 1:nrow(tr)){
     sf::st_transform(.,st_crs(regions))
 
   # Spatial join --------------------------------------------------------
-  
+  # joins the point centres
   trends_regional_join_tst <- trends_sf %>% 
     st_join(regions,join = st_within) |> 
     select(-area_km2)
 
-# Linking coastal trends that are within 15km of polygon ------------------
-
   
+  
+# Linking coastal trends that are within 15km of polygon ------------------
   linked <- trends_regional_join_tst |> 
     filter(!is.na(region)) # trends that have been linked to a region
   
@@ -110,6 +119,8 @@ for(i in 1:nrow(tr)){
  trends_regional_join <- linked |> # recombining the newly linked trends with the overlap trends
    bind_rows(linked_miss)
   
+ # calculating the number of grid cells joined to each region
+ # useful below for a coarse coverage estimate of the region (although not of the species range in the region)
  n_grids <- trends_regional_join |> 
    group_by(region) |> 
    summarise(n_grid_cells = n(),
@@ -128,26 +139,23 @@ for(i in 1:nrow(tr)){
   print(tst)
   dev.off()
  } 
-  # 
-  # trends_regional_join <- trends_sf %>% 
-  #   st_join(regions,
-  #           left = FALSE) #left = FALSE drops trends outside of the regions map
-  # 
-  # 
- trends_regional_join <- trends_regional_join |> 
+  
+ trends_regional_join <- trends_regional_join |> #list of which region is associated with each grid cell
    st_drop_geometry()
   
+
+# joining the spatial associations back to the full trend data ------------
  trends_region <- trends %>% 
    st_drop_geometry() |> 
     inner_join(trends_regional_join,
                by = "srd_id") |>  
     group_by(region,fold) %>%
     summarise(weighted_abd_ppy = sum(abd * abd_ppy) / sum(abd), # trend weighted by mean abundance in cell
-              .groups = "drop") %>% 
-    group_by(region) %>%
+              .groups = "drop") %>%                           # summarised for each of the 100 folds
+    group_by(region) %>% # now summarising across all folds
     summarise(abd_ppy_median = median(weighted_abd_ppy, na.rm = TRUE),
-              abd_ppy_lower = quantile(weighted_abd_ppy, 0.10, na.rm = TRUE),
-              abd_ppy_upper = quantile(weighted_abd_ppy, 0.90, na.rm = TRUE),
+              abd_ppy_lower = quantile(weighted_abd_ppy, 0.05, na.rm = TRUE), #90% CIs
+              abd_ppy_upper = quantile(weighted_abd_ppy, 0.95, na.rm = TRUE),
               .groups = "drop") %>% 
     arrange(abd_ppy_median)
   
@@ -157,8 +165,9 @@ for(i in 1:nrow(tr)){
                by = "region") |> 
     inner_join(region_names,
                by = "region") |> 
-    mutate(approx_area_w_trend = n_grid_cells*(27^2),
-           approx_p_w_trend = approx_area_w_trend/area_km2)
+    mutate(approx_area_w_trend = n_grid_cells*(27^2), # area of 27x27km grid cell
+           approx_p_w_trend = approx_area_w_trend/area_km2) # approx area w trends, but naive to (biased high) coastal regions
+  
   
   saveRDS(trends_region,paste0("species_trend_summaries/",species,"_eBird_trends_by_region.rds"))
   print(round(i/nrow(tr),2))
@@ -167,7 +176,7 @@ for(i in 1:nrow(tr)){
 
 
 
-# compile species values --------------------------------------------------
+# compile species values estiamted above --------------------------------------------------
 # 
  tr_join <- tr |> 
   select(species_code,
@@ -225,6 +234,9 @@ all_eBird_trends <- all_eBird_trends |>
 
 
 
+# exploring the area summaries as a coarse sanity check -------------------
+
+
 
 reg_sum <- all_eBird_trends |> 
   group_by(region) |> 
@@ -266,6 +278,11 @@ sp_sum <- all_eBird_trends |>
             min_p_covered_area = min(approximate_proportion_region_area_w_eBird_trends),
             max_p_covered_area = max(approximate_proportion_region_area_w_eBird_trends)) |> 
   mutate(p_regs_over_100_percent_covered = n_regs_over_100_percent_covered/n_regs)
+
+
+
+
+# final export of rounded values ------------------------------------------
 
 
 all_eBird_trends <- all_eBird_trends |> 
