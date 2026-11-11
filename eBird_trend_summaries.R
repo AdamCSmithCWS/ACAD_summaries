@@ -214,8 +214,8 @@ all_eBird_trends <- all_eBird_trends |>
   left_join(tr_join,
             by = "species_code") |> 
   rename(eBird_trend = abd_ppy_median,
-         eBird_trend_lower_80p_ci = abd_ppy_lower,
-         eBird_trend_upper_80p_ci = abd_ppy_upper,
+         eBird_trend_lower_90p_ci = abd_ppy_lower,
+         eBird_trend_upper_90p_ci = abd_ppy_upper,
          number_trend_grid_cells_in_region = n_grid_cells,
          area_of_region_km2 = area_km2,
          approximate_area_w_eBird_trends = approx_area_w_trend,
